@@ -1,3 +1,9 @@
+# -*- coding: utf-8 -*-
+"""
+Instagram username checker for 4 and 5 letter usernames
+Muallif: Nurulloh uchun to‘liq optimallashtirilgan
+"""
+
 import requests
 import random
 import time
@@ -5,41 +11,56 @@ import urllib3
 import threading
 import logging
 
+# SSL ogohlantirishlarini o‘chirish
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Log sozlamasi
+# Log sozlamalari
 logging.basicConfig(level=logging.INFO, datefmt="%H:%M:%S")
 
-# Faylni ochish
-with open("5_letter_combinations.csv", "r") as f:
-    lines = f.readlines()[1:]  # birinchi qatorda sarlavha bor
+# 4 va 5 harfli fayllarni o‘qish funksiyasi
+def load_usernames(filename):
+    with open(filename, "r") as f:
+        return [line.strip() for line in f.readlines()[1:] if line.strip()]
 
-# Foydali listga aylantirish
-usernames = [line.strip().split(",")[0] for line in lines]
+usernames_5 = load_usernames("5_letter_usernames_only.csv")
+usernames_4 = load_usernames("4_letter_usernames_only.csv")
+usernames = usernames_4 + usernames_5
 
-# Mavjud threadlar
-active_threads = []
+# Bo‘sh username’lar ro‘yxati
+available_list = []
 
-# Tekshirish funksiyasi
-def check(un, index):
+# Tekshiruvchi funksiya
+def check(username, index):
     time.sleep(random.uniform(0.5, 1.5))
-    url = f"https://www.instagram.com/{un}"
+    url = f"https://www.instagram.com/{username}"
     try:
-        x = requests.get(url, verify=False)
-        if x.status_code == 200:
-            logging.info(f"[{index}] ❌ Taken - {un}")
+        response = requests.get(url, verify=False, timeout=10)
+        if response.status_code == 200:
+            logging.info(f"[{index}] ❌ Taken - {username}")
         else:
-            logging.info(f"[{index}] ✅ Available - {un} ({x.status_code})")
+            logging.info(f"[{index}] ✅ Available - {username} ({response.status_code})")
+            available_list.append(username)
             with open("available.txt", "a") as f2:
-                f2.write(un + "\n")
+                f2.write(username + "\n")
     except Exception as e:
-        logging.warning(f"[{index}] ⚠️ Error for {un}: {e}")
+        logging.warning(f"[{index}] ⚠️ Error for {username}: {e}")
 
-# Har bir foydalanuvchini tekshirish
-for idx, un in enumerate(usernames):
-    thread = threading.Thread(target=check, args=(un, idx), daemon=True)
-    thread.start()
-    active_threads.append(thread)
+# Threadlarni ishga tushirish
+threads = []
+for idx, username in enumerate(usernames):
+    t = threading.Thread(target=check, args=(username, idx), daemon=True)
+    t.start()
+    threads.append(t)
     time.sleep(1.2)
     if idx % 20 == 0:
         time.sleep(10)
+
+# Tugashini kutamiz
+for t in threads:
+    t.join()
+
+# Yakuniy natijani chiqarish
+print("\n✅ Tekshiruv tugadi. Bo'sh (available) username'lar:")
+for name in available_list:
+    print(" -", name)
+print(f"\nJami topildi: {len(available_list)} ta.")
