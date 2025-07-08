@@ -13,7 +13,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import threading
 import logging
 
-f = open("usernames3.csv", "r")
+f = open("5_letter_combinations.csv", "r")
 data = f.readlines()
 
 logging.basicConfig(level=logging.INFO,
