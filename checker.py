@@ -1,66 +1,108 @@
 # -*- coding: utf-8 -*-
-"""
-Instagram username checker for 4 and 5 letter usernames
-Muallif: Nurulloh uchun to‘liq optimallashtirilgan
-"""
-
 import requests
 import random
 import time
 import urllib3
 import threading
 import logging
+from itertools import product
 
-# SSL ogohlantirishlarini o‘chirish
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Log sozlamalari
-logging.basicConfig(level=logging.INFO, datefmt="%H:%M:%S")
+# Sozlash parametrlari
+CHARACTERS = ['x', 'z', 'n', 'a', '.', '_']  # Ishlatiladigan belgilar
+MIN_LENGTH = 4  # Minimal uzunlik
+MAX_LENGTH = 5  # Maksimal uzunlik
+REQUEST_DELAY = 1.25  # So'rovlar orasidagi kechikish
+BATCH_SIZE = 20  # Har 20 so'rovdan keyin katta kechikish
+BATCH_DELAY = 15  # Batch uchun kechikish
+MAX_THREADS = 10  # Maksimal parallel threadlar soni
 
-# 4 va 5 harfli fayllarni o‘qish funksiyasi
-def load_usernames(filename):
-    with open(filename, "r") as f:
-        return [line.strip() for line in f.readlines()[1:] if line.strip()]
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt="%H:%M:%S"
+)
 
-usernames_5 = load_usernames("5_letter_usernames_only.csv")
-usernames_4 = load_usernames("4_letter_usernames_only.csv")
-usernames = usernames_4 + usernames_5
+def generate_usernames():
+    """Foydalanuvchi nomlarini generatsiya qilish"""
+    usernames = []
+    for length in range(MIN_LENGTH, MAX_LENGTH + 1):
+        # Barcha mumkin bo'lgan kombinatsiyalarni generatsiya qilish
+        for combo in product(CHARACTERS, repeat=length):
+            username = ''.join(combo)
+            # Qo'shimcha tekshirishlar (masalan, ketma-ket 2 nuqta yoki pastki chiziq)
+            if '..' in username or '__' in username:
+                continue
+            if username.startswith(('.', '_')) or username.endswith(('.', '_')):
+                continue
+            usernames.append(username)
+    return usernames
 
-# Bo‘sh username’lar ro‘yxati
-available_list = []
-
-# Tekshiruvchi funksiya
-def check(username, index):
-    time.sleep(random.uniform(0.5, 1.5))
-    url = f"https://www.instagram.com/{username}"
+def check_username(username):
+    """Instagramda username mavjudligini tekshirish"""
     try:
+        url = f"https://www.instagram.com/{username}"
         response = requests.get(url, verify=False, timeout=10)
-        if response.status_code == 200:
-            logging.info(f"[{index}] ❌ Taken - {username}")
+        
+        if response.status_code == 404:
+            # 404 - mavjud emas (band qilinmagan)
+            logging.info(f"✅ Band qilinmagan: {username}")
+            save_available(username)
+            return True
+        elif response.status_code == 200:
+            # 200 - mavjud (band qilingan)
+            logging.info(f"❌ Band qilingan: {username}")
+            return False
         else:
-            logging.info(f"[{index}] ✅ Available - {username} ({response.status_code})")
-            available_list.append(username)
-            with open("available.txt", "a") as f2:
-                f2.write(username + "\n")
+            # Boshqa status kodlari
+            logging.warning(f"⚠️ Noma'lum javob ({response.status_code}): {username}")
+            return False
+            
     except Exception as e:
-        logging.warning(f"[{index}] ⚠️ Error for {username}: {e}")
+        logging.error(f"🚫 Xatolik ({username}): {str(e)}")
+        return False
 
-# Threadlarni ishga tushirish
-threads = []
-for idx, username in enumerate(usernames):
-    t = threading.Thread(target=check, args=(username, idx), daemon=True)
-    t.start()
-    threads.append(t)
-    time.sleep(1.2)
-    if idx % 20 == 0:
-        time.sleep(10)
+def save_available(username):
+    """Band qilinmagan nomlarni faylga yozish"""
+    with open("available.txt", "a") as f:
+        f.write(f"{username}\n")
 
-# Tugashini kutamiz
-for t in threads:
-    t.join()
+def main():
+    # Foydalanuvchi nomlarini generatsiya qilish
+    usernames = generate_usernames()
+    logging.info(f"Jami {len(usernames)} ta nom generatsiya qilindi")
+    
+    active_threads = []
+    checked_count = 0
+    
+    for username in usernames:
+        # Aktiv threadlar sonini cheklash
+        while threading.active_count() > MAX_THREADS:
+            time.sleep(0.5)
+            
+        # Yangi thread yaratish
+        t = threading.Thread(
+            target=check_username,
+            args=(username,),
+            daemon=True
+        )
+        t.start()
+        active_threads.append(t)
+        
+        checked_count += 1
+        time.sleep(REQUEST_DELAY)
+        
+        # Batch tekshiruvlari uchun qo'shimcha kechikish
+        if checked_count % BATCH_SIZE == 0:
+            logging.info(f"Batch yakunlandi, {BATCH_DELAY} soniya kutilmoqda...")
+            time.sleep(BATCH_DELAY)
+    
+    # Barcha threadlar tugashini kutish
+    for t in active_threads:
+        t.join()
+    
+    logging.info("Barcha nomlar tekshirildi!")
 
-# Yakuniy natijani chiqarish
-print("\n✅ Tekshiruv tugadi. Bo'sh (available) username'lar:")
-for name in available_list:
-    print(" -", name)
-print(f"\nJami topildi: {len(available_list)} ta.")
+if __name__ == "__main__":
+    main()
