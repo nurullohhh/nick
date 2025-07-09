@@ -1,108 +1,124 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
+import csv
 import requests
-import random
 import time
-import urllib3
-import threading
-import logging
-from itertools import product
+import random
+import sys
+from tqdm import tqdm
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# SSL ogohlantirishlarini o'chirish
+requests.packages.urllib3.disable_warnings()
 
-# Sozlash parametrlari
-CHARACTERS = ['x', 'z', 'n', 'a', '.', '_']  # Ishlatiladigan belgilar
-MIN_LENGTH = 4  # Minimal uzunlik
-MAX_LENGTH = 5  # Maksimal uzunlik
-REQUEST_DELAY = 1.25  # So'rovlar orasidagi kechikish
-BATCH_SIZE = 20  # Har 20 so'rovdan keyin katta kechikish
-BATCH_DELAY = 15  # Batch uchun kechikish
-MAX_THREADS = 10  # Maksimal parallel threadlar soni
+# Asosiy sozlamalar
+DELAY = 3.0  # Har bir so'rov orasidagi minimal vaqt
+TIMEOUT = 15  # So'rov uchun maksimal kutish vaqti
+RETRY_COUNT = 2  # Qayta urinishlar soni
+INPUT_FILE = "5_harfli_undosh_niklar.csv"  # Kirish fayli
+OUTPUT_FILE = "mavjud_emas_niklar.txt"  # Natijalar fayli
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt="%H:%M:%S"
-)
+# User-Agentlar ro'yxati
+USER_AGENTS = [
+    "Mozilla/5.0 (Linux; Android 10; SM-A205U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 10; LM-Q720) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Mobile Safari/537.36",
+    "Instagram 219.0.0.12.117 Android"
+]
 
-def generate_usernames():
-    """Foydalanuvchi nomlarini generatsiya qilish"""
-    usernames = []
-    for length in range(MIN_LENGTH, MAX_LENGTH + 1):
-        # Barcha mumkin bo'lgan kombinatsiyalarni generatsiya qilish
-        for combo in product(CHARACTERS, repeat=length):
-            username = ''.join(combo)
-            # Qo'shimcha tekshirishlar (masalan, ketma-ket 2 nuqta yoki pastki chiziq)
-            if '..' in username or '__' in username:
-                continue
-            if username.startswith(('.', '_')) or username.endswith(('.', '_')):
-                continue
-            usernames.append(username)
-    return usernames
+def get_random_agent():
+    """Tasodifiy User-Agent tanlash"""
+    return random.choice(USER_AGENTS)
 
-def check_username(username):
-    """Instagramda username mavjudligini tekshirish"""
+def read_niks_from_csv():
+    """CSV fayldan niklar ro'yxatini o'qish"""
     try:
-        url = f"https://www.instagram.com/{username}"
-        response = requests.get(url, verify=False, timeout=10)
-        
-        if response.status_code == 404:
-            # 404 - mavjud emas (band qilinmagan)
-            logging.info(f"✅ Band qilinmagan: {username}")
-            save_available(username)
-            return True
-        elif response.status_code == 200:
-            # 200 - mavjud (band qilingan)
-            logging.info(f"❌ Band qilingan: {username}")
-            return False
-        else:
-            # Boshqa status kodlari
-            logging.warning(f"⚠️ Noma'lum javob ({response.status_code}): {username}")
-            return False
-            
+        with open(INPUT_FILE, mode='r', encoding='utf-8') as file:
+            reader = csv.reader(file)
+            # Fayldagi barcha qatorlarni o'qiymiz (sarlavha qatorini qo'shmasdan)
+            return [row[0] for row in reader if row and len(row[0]) == 5]
     except Exception as e:
-        logging.error(f"🚫 Xatolik ({username}): {str(e)}")
-        return False
+        print(f"Xatolik: {INPUT_FILE} faylini o'qib bo'lmadi. Sabab: {e}")
+        sys.exit(1)
 
-def save_available(username):
-    """Band qilinmagan nomlarni faylga yozish"""
-    with open("available.txt", "a") as f:
-        f.write(f"{username}\n")
+def check_nik_availability(nik):
+    """Nikning mavjudligini tekshirish"""
+    headers = {'User-Agent': get_random_agent()}
+    url = f"https://www.instagram.com/{nik}/"
+    
+    for attempt in range(RETRY_COUNT):
+        try:
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=TIMEOUT,
+                verify=False,
+                allow_redirects=False
+            )
+            
+            if response.status_code == 200:
+                return False  # Nik band
+            elif response.status_code == 404:
+                return True  # Nik bo'sh
+            elif response.status_code == 429:
+                time.sleep(30)  # Limit qo'yilganda 30 soniya kutish
+                continue
+                
+        except Exception as e:
+            time.sleep(DELAY * 2)
+            continue
+        
+        time.sleep(DELAY)
+    
+    return None  # Xatolik yuz berdi
+
+def save_available_nik(nik):
+    """Bo'sh nikni faylga yozish"""
+    with open(OUTPUT_FILE, "a", encoding='utf-8') as f:
+        f.write(nik + "\n")
 
 def main():
-    # Foydalanuvchi nomlarini generatsiya qilish
-    usernames = generate_usernames()
-    logging.info(f"Jami {len(usernames)} ta nom generatsiya qilindi")
+    print("\n5 Harfli Undosh Niklar Tekshirgichi")
+    print(f"Fayl: {INPUT_FILE}\n")
     
-    active_threads = []
-    checked_count = 0
+    # Niklarni fayldan o'qish
+    niks = read_niks_from_csv()
     
-    for username in usernames:
-        # Aktiv threadlar sonini cheklash
-        while threading.active_count() > MAX_THREADS:
-            time.sleep(0.5)
-            
-        # Yangi thread yaratish
-        t = threading.Thread(
-            target=check_username,
-            args=(username,),
-            daemon=True
-        )
-        t.start()
-        active_threads.append(t)
+    if not niks:
+        print("Faylda hech qanday 5 harfli nik topilmadi!")
+        return
+    
+    print(f"Jami {len(niks)} ta nik topildi")
+    print(f"Tekshiruv taxminan {len(niks)*DELAY/60:.1f} daqiqa davom etadi\n")
+    
+    # Progress bar bilan tekshirish
+    available_count = 0
+    pbar = tqdm(niks, desc="Tekshirilmoqda", unit="nik")
+    
+    for nik in pbar:
+        result = check_nik_availability(nik)
         
-        checked_count += 1
-        time.sleep(REQUEST_DELAY)
+        if result is True:
+            pbar.write(f"✅ Bo'sh: {nik}")
+            save_available_nik(nik)
+            available_count += 1
+        elif result is False:
+            pbar.write(f"❌ Band: {nik}")
+        else:
+            pbar.write(f"⚠️ Xato: {nik}")
         
-        # Batch tekshiruvlari uchun qo'shimcha kechikish
-        if checked_count % BATCH_SIZE == 0:
-            logging.info(f"Batch yakunlandi, {BATCH_DELAY} soniya kutilmoqda...")
-            time.sleep(BATCH_DELAY)
+        time.sleep(DELAY)
     
-    # Barcha threadlar tugashini kutish
-    for t in active_threads:
-        t.join()
-    
-    logging.info("Barcha nomlar tekshirildi!")
+    # Natijalarni ko'rsatish
+    print("\n" + "="*50)
+    print(f"Tekshiruv yakunlandi! Jami {available_count} ta bo'sh nik topildi")
+    print(f"Natijalar {OUTPUT_FILE} fayliga yozildi")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nDastur to'xtatildi")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\nKutilmagan xatolik: {e}")
+        sys.exit(1)
